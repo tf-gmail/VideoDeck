@@ -539,7 +539,7 @@ function jobCard(j) {
     ? `<div class="progress-wrap">
         <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
         <div class="progress-row">
-          <span class="progress-label">${pct}% • ${etaLabel}</span>
+          <span class="progress-label">${pct}% • ${escHtml(stageLabel)} • ${etaLabel}</span>
           ${canStart ? `<button class="btn-action" onclick="startJob('${j.id}')">Start</button>` : ''}
           ${canStop ? `<button class="btn-stop" onclick="stopJob('${j.id}')">Stop</button>` : ''}
           <button class="btn-action" onclick="openOutput('${j.id}')">Output</button>
@@ -656,11 +656,29 @@ async function resummarizeJob(jobId) {
 }
 
 function downloadTranscript(jobId) {
-  window.location.href = `/api/jobs/${jobId}/download/transcript`;
+  triggerDownload(`/api/jobs/${jobId}/download/transcript`, 'transcript.txt');
 }
 
 function downloadSummary(jobId) {
-  window.location.href = `/api/jobs/${jobId}/download/summary`;
+  triggerDownload(`/api/jobs/${jobId}/download/summary`, 'summary.md');
+}
+
+async function triggerDownload(url, filename) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(await resp.text());
+    const blob = await resp.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename || 'download';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (err) {
+    showToast(`Download failed: ${err.message}`, true);
+  }
 }
 
 async function deleteJob(jobId, filename) {

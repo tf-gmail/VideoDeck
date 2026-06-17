@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -24,6 +25,8 @@ from db.jobs import create_job, delete_job, get_job, init_db, list_jobs, update_
 from pipeline.ingest import SUPPORTED_EXTENSIONS, extract_audio, trim_audio
 from pipeline.summarize import list_models, summarize
 from pipeline.transcribe import TranscriptionCancelled, transcribe_async
+
+logger = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR    = Path(__file__).parent
@@ -276,7 +279,16 @@ async def api_resummarize_job(
         except Exception:
             pass
 
+    logger.info(
+        "Job %s: re-summarize requested (model=%s, prompt=%s, language=%s)",
+        job_id,
+        llm_model,
+        prompt_style,
+        lang_value,
+    )
+
     await update_job(job_id, status="running", stage="Re-summarizing…", progress=66, error=None)
+    await update_job(job_id, stage="Starting summary generation…", progress=67)
 
     async def _summary_progress(pct: int, stage: str) -> None:
         # Re-summarize occupies 66..99 before final completion.
