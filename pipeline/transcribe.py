@@ -79,6 +79,8 @@ def transcribe_wav(
     model_size: str = "large-v3",
     language: str | None = None,
     progress_cb: Callable[[int], bool | None] | None = None,
+    segment_cb: Callable[[dict], None] | None = None,
+    time_offset: float = 0.0,
 ) -> dict:
     """
     Transcribe *wav_path* and return a dict with:
@@ -101,10 +103,15 @@ def transcribe_wav(
     duration = info.duration or 1.0
 
     for seg in segments_iter:
-        segments.append(
-            {"start": round(seg.start, 2), "end": round(seg.end, 2), "text": seg.text.strip()}
-        )
-        full_text_parts.append(seg.text.strip())
+        seg_dict = {
+            "start": round(seg.start + time_offset, 2),
+            "end": round(seg.end + time_offset, 2),
+            "text": seg.text.strip(),
+        }
+        segments.append(seg_dict)
+        full_text_parts.append(seg_dict["text"])
+        if segment_cb:
+            segment_cb(seg_dict)
         if progress_cb:
             pct = min(int((seg.end / duration) * 100), 99)
             should_continue = progress_cb(pct)
@@ -123,10 +130,12 @@ async def transcribe_async(
     model_size: str = "large-v3",
     language: str | None = None,
     progress_cb: Callable[[int], bool | None] | None = None,
+    segment_cb: Callable[[dict], None] | None = None,
+    time_offset: float = 0.0,
 ) -> dict:
     """Run transcription in a thread pool so the event loop stays free."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        lambda: transcribe_wav(wav_path, model_size, language, progress_cb),
+        lambda: transcribe_wav(wav_path, model_size, language, progress_cb, segment_cb, time_offset),
     )

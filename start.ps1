@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+$port = if ($env:VIDEODECK_PORT) { [int]$env:VIDEODECK_PORT } else { 8000 }
+
 # Prefer py launcher, then fallback to python.
 $pythonCmd = $null
 if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -26,4 +28,17 @@ if (-not (Test-Path $venvPython)) {
 
 & $venvPython -m pip install --upgrade pip
 & $venvPython -m pip install -r requirements.txt
+
+# Stop an already running server process on this port.
+try {
+    $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty OwningProcess
+    if ($existing) {
+        Write-Host "Stopping existing server PID $existing on port $port"
+        Stop-Process -Id $existing -Force
+    }
+} catch {
+    # Ignore cleanup failures and continue startup.
+}
+
 & $venvPython main.py

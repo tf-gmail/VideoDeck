@@ -23,5 +23,6 @@ Write 5–10 questions that test understanding of the material. After each quest
 ---
 Rules:
 - Base everything strictly on the transcript. Do not invent facts not present in the source material.
-- Write in clear, plain English suitable for a student encountering this topic for the first time.
+- Write in clear, plain language suitable for a student encountering this topic for the first time.
+- Ensure full coverage: if the transcript reflects slide-based teaching, include all relevant information from each slide/section in the notes (no major slide topic may be skipped).
 - Keep the Glossary and Quiz sections even if the content is informal or conversational — adapt accordingly.

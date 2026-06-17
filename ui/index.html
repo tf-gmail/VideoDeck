@@ -132,10 +132,29 @@
 
   .job-name {
     display: block;
+    position: relative;
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .job-name:hover::after {
+    content: attr(title);
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    z-index: 30;
+    max-width: min(80vw, 900px);
+    white-space: normal;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #0b1220;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.35;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+    pointer-events: none;
   }
   .job-stage { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .job-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
@@ -509,7 +528,9 @@ function jobCard(j) {
   const elapsed = Math.max(0, Math.floor(nowSec - (j.created_at || nowSec)));
   const etaLabel = buildEtaLabel(j.status, pct, elapsed);
   const canStop = j.status === 'queued' || j.status === 'running';
+  const canStart = j.status === 'queued';
   const canRestart = j.status === 'stopped' || j.status === 'error';
+  const canContinue = (j.status === 'stopped' || j.status === 'error') && j.has_partial_transcript && !j.has_full_transcript;
   const canResummarize = j.has_transcript && j.status !== 'running' && j.status !== 'queued';
   const canDownloadTranscript = j.has_transcript;
   const canDownloadSummary = j.has_summary;
@@ -519,14 +540,18 @@ function jobCard(j) {
         <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
         <div class="progress-row">
           <span class="progress-label">${pct}% • ${etaLabel}</span>
+          ${canStart ? `<button class="btn-action" onclick="startJob('${j.id}')">Start</button>` : ''}
           ${canStop ? `<button class="btn-stop" onclick="stopJob('${j.id}')">Stop</button>` : ''}
+          <button class="btn-action" onclick="openOutput('${j.id}')">Output</button>
         </div>
        </div>`
     : `<div class="job-actions">
          ${canDownloadTranscript ? `<button class="btn-action" onclick="downloadTranscript('${j.id}')">Transcript</button>` : ''}
          ${canDownloadSummary ? `<button class="btn-action" onclick="downloadSummary('${j.id}')">Summary</button>` : ''}
+         ${canContinue ? `<button class="btn-action" onclick="continueJob('${j.id}')">Continue</button>` : ''}
          ${canResummarize ? `<button class="btn-action" onclick="resummarizeJob('${j.id}')">Re-summarize</button>` : ''}
          ${canRestart ? `<button class="btn-action" onclick="restartJob('${j.id}')">Restart</button>` : ''}
+         <button class="btn-action" onclick="deleteJob('${j.id}', '${escHtml(j.filename)}')">Delete</button>
          <button class="btn-action" onclick="openOutput('${j.id}')">Open Folder</button>
        </div>`;
 
@@ -583,6 +608,17 @@ async function stopJob(jobId) {
   }
 }
 
+async function startJob(jobId) {
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/start`, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast('Job gestartet');
+    startPolling();
+  } catch (err) {
+    showToast(`Start fehlgeschlagen: ${err.message}`, true);
+  }
+}
+
 async function restartJob(jobId) {
   try {
     const resp = await fetch(`/api/jobs/${jobId}/restart`, { method: 'POST' });
@@ -591,6 +627,17 @@ async function restartJob(jobId) {
     startPolling();
   } catch (err) {
     showToast(`Could not restart: ${err.message}`, true);
+  }
+}
+
+async function continueJob(jobId) {
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/continue`, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast('Continuing from checkpoint');
+    startPolling();
+  } catch (err) {
+    showToast(`Could not continue: ${err.message}`, true);
   }
 }
 
@@ -614,6 +661,20 @@ function downloadTranscript(jobId) {
 
 function downloadSummary(jobId) {
   window.location.href = `/api/jobs/${jobId}/download/summary`;
+}
+
+async function deleteJob(jobId, filename) {
+  const ok = confirm(`Job wirklich loeschen?\n\n${filename}`);
+  if (!ok) return;
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast('Job geloescht');
+    await refreshJobs();
+    startPolling();
+  } catch (err) {
+    showToast(`Loeschen fehlgeschlagen: ${err.message}`, true);
+  }
 }
 
 async function openOutput(jobId) {

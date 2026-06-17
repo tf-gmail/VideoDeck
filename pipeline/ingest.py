@@ -57,3 +57,34 @@ async def extract_audio(source: Path, dest_dir: Path) -> Path:
         )
 
     return wav_path
+
+
+async def trim_audio(source_wav: Path, dest_wav: Path, start_sec: float) -> Path:
+    """
+    Trim *source_wav* from *start_sec* to end and save to *dest_wav*.
+    Returns *dest_wav*.
+    """
+    cmd = [
+        _ffmpeg_bin(),
+        "-y",
+        "-ss", f"{max(0.0, start_sec):.3f}",
+        "-i", str(source_wav),
+        "-ar", "16000",
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        str(dest_wav),
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"FFmpeg trim failed (code {proc.returncode}):\n{stderr.decode(errors='replace')}"
+        )
+
+    return dest_wav
