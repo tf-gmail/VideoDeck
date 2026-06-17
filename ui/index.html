@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VideoDeck</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0f1117;
+    --surface: #1a1d27;
+    --border:  #2a2d3a;
+    --accent:  #6c63ff;
+    --accent2: #a78bfa;
+    --text:    #e2e8f0;
+    --muted:   #64748b;
+    --green:   #22c55e;
+    --red:     #ef4444;
+    --yellow:  #f59e0b;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: .5px; }
+  header h1 span { color: var(--accent2); }
+
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px; }
+
+  /* ── Drop Zone ── */
+  #dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+  }
+  #dropzone.hover, #dropzone:hover {
+    border-color: var(--accent);
+    background: rgba(108,99,255,.05);
+  }
+  #dropzone svg { opacity: .4; margin-bottom: 12px; }
+  #dropzone p   { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  #dropzone strong { color: var(--text); }
+  #file-input { display: none; }
+
+  /* ── Settings row ── */
+  #settings {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 20px 0;
+    align-items: flex-end;
+  }
+  .setting-group { display: flex; flex-direction: column; gap: 4px; }
+  .setting-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+  }
+  select:focus { border-color: var(--accent); }
+
+  /* ── Jobs table ── */
+  #jobs-section h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 0;
+  }
+  .jobs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    gap: 8px;
+  }
+  .jobs-frame {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    max-height: 46vh;
+    overflow-y: auto;
+    background: rgba(26, 29, 39, 0.45);
+  }
+  #jobs-list { display: flex; flex-direction: column; gap: 8px; }
+  .job-day {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    margin: 4px 2px;
+  }
+
+  .job-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px 28px;
+    align-items: center;
+    gap: 12px;
+    transition: border-color .15s;
+  }
+  .job-card:hover { border-color: var(--accent); }
+
+  .job-main { min-width: 0; }
+
+  .job-name {
+    display: block;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .job-stage { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .job-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Progress bar */
+  .progress-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .progress-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .progress-bar-bg {
+    background: var(--border);
+    border-radius: 4px;
+    height: 6px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--accent);
+    transition: width .3s;
+  }
+  .progress-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: left;
+  }
+
+  .btn-stop {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--red);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color .15s, color .15s;
+  }
+  .btn-stop:hover { border-color: var(--red); color: #ffd4d4; }
+
+  /* Status dot */
+  .status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .status-dot.queued    { background: var(--muted); }
+  .status-dot.running   { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); animation: pulse 1s infinite; }
+  .status-dot.done      { background: var(--green); }
+  .status-dot.error     { background: var(--red); }
+  .status-dot.stopped   { background: #94a3b8; }
+
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+
+  /* Open button on done cards */
+  .btn-open {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--accent2);
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+    white-space: nowrap;
+    grid-column: 2;
+    justify-self: end;
+  }
+  .btn-open:hover { border-color: var(--accent2); color: var(--text); }
+
+  .job-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .btn-action {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color .15s, color .15s;
+  }
+  .btn-action:hover { border-color: var(--accent2); color: var(--accent2); }
+
+  /* Error text */
+  .job-error {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 4px;
+  }
+
+  /* Empty state */
+  #empty-state {
+    text-align: center;
+    color: var(--muted);
+    padding: 40px 0;
+    font-size: 13px;
+  }
+
+  /* Settings modal */
+  #settings-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: border-color .15s, color .15s;
+  }
+  #settings-btn:hover { border-color: var(--accent); color: var(--text); }
+
+  /* Toast */
+  #toast {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 18px;
+    font-size: 13px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .2s, transform .2s;
+    pointer-events: none;
+    max-width: 320px;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast.error { border-color: var(--red); color: var(--red); }
+
+  @media (max-width: 760px) {
+    .job-card {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+    }
+    .status-dot {
+      justify-self: end;
+    }
+    .btn-open {
+      grid-column: auto;
+      justify-self: start;
+    }
+    .job-actions {
+      justify-content: flex-start;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Video<span>Deck</span></h1>
+  <button id="settings-btn">⚙ Settings</button>
+</header>
+
+<main>
+  <!-- Drop zone -->
+  <div id="dropzone">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/>
+      <line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    <strong>Drop video or audio files here</strong>
+    <p>MP4 · MKV · WebM · MOV · MP3 · WAV · M4A · FLAC</p>
+    <p style="margin-top:8px">or <span style="color:var(--accent2);cursor:pointer" onclick="document.getElementById('file-input').click()">browse</span></p>
+  </div>
+  <input type="file" id="file-input" multiple
+         accept=".mp4,.mkv,.webm,.mov,.avi,.mp3,.wav,.m4a,.flac,.ogg,.aac" />
+
+  <!-- Inline settings -->
+  <div id="settings">
+    <div class="setting-group">
+      <label>Whisper model</label>
+      <select id="sel-whisper">
+        <option value="base">base — fastest</option>
+        <option value="medium">medium</option>
+        <option value="large-v3" selected>large-v3 — best quality</option>
+      </select>
+    </div>
+    <div class="setting-group">
+      <label>LLM model</label>
+      <select id="sel-llm"><option>Loading…</option></select>
+    </div>
+    <div class="setting-group">
+      <label>Prompt style</label>
+      <select id="sel-prompt">
+        <option value="study_notes" selected>Study Notes</option>
+        <option value="executive_summary">Executive Summary</option>
+      </select>
+    </div>
+    <div class="setting-group">
+      <label>Language</label>
+      <select id="sel-lang">
+        <option value="">Auto-detect</option>
+        <option value="en">English</option>
+        <option value="de">German</option>
+        <option value="fr">French</option>
+        <option value="es">Spanish</option>
+        <option value="zh">Chinese</option>
+        <option value="ja">Japanese</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Job list -->
+  <div id="jobs-section">
+    <div class="jobs-header">
+      <h2 id="jobs-title">Jobs</h2>
+      <select id="sort-day" title="Sort jobs by day">
+        <option value="newest">Newest day first</option>
+        <option value="oldest">Oldest day first</option>
+      </select>
+    </div>
+    <div class="jobs-frame">
+      <div id="jobs-list">
+        <div id="empty-state">No jobs yet — drop a file to get started.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const dropzone  = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+const jobsList  = document.getElementById('jobs-list');
+const jobsTitle = document.getElementById('jobs-title');
+const emptyState = document.getElementById('empty-state');
+const toast     = document.getElementById('toast');
+const selWhisper = document.getElementById('sel-whisper');
+const selLLM    = document.getElementById('sel-llm');
+const selPrompt = document.getElementById('sel-prompt');
+const selLang   = document.getElementById('sel-lang');
+const sortDay   = document.getElementById('sort-day');
+
+let pollTimer = null;
+
+sortDay.addEventListener('change', () => refreshJobs());
+
+// ── Toast ──────────────────────────────────────────────
+function showToast(msg, isError = false) {
+  toast.textContent = msg;
+  toast.className = 'show' + (isError ? ' error' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { toast.className = ''; }, 3500);
+}
+
+// ── Load available LLM models ──────────────────────────
+async function loadModels() {
+  try {
+    const resp = await fetch('/api/models');
+    const { models } = await resp.json();
+    selLLM.innerHTML = models.length
+      ? models.map(m => `<option value="${m}">${m}</option>`).join('')
+      : '<option value="">No models found</option>';
+  } catch {
+    selLLM.innerHTML = '<option value="">Ollama unavailable</option>';
+  }
+}
+
+// ── Drop / file select ─────────────────────────────────
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('hover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('hover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('hover');
+  handleFiles([...e.dataTransfer.files]);
+});
+dropzone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  handleFiles([...fileInput.files]);
+  fileInput.value = '';
+});
+
+async function handleFiles(files) {
+  for (const file of files) {
+    await uploadFile(file);
+  }
+  startPolling();
+}
+
+async function uploadFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('whisper_model', selWhisper.value);
+  fd.append('llm_model', selLLM.value);
+  fd.append('prompt_style', selPrompt.value);
+  if (selLang.value) fd.append('language', selLang.value);
+
+  try {
+    const resp = await fetch('/api/jobs', { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast(`Queued: ${file.name}`);
+  } catch (err) {
+    showToast(`Upload failed: ${err.message}`, true);
+  }
+}
+
+// ── Polling ────────────────────────────────────────────
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(refreshJobs, 1500);
+  refreshJobs();
+}
+
+async function refreshJobs() {
+  try {
+    const resp = await fetch('/api/jobs');
+    const jobs = await resp.json();
+    renderJobs(jobs);
+    const allDone = jobs.every(j => j.status === 'done' || j.status === 'error' || j.status === 'stopped');
+    if (jobs.length > 0 && allDone) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  } catch { /* network hiccup — ignore */ }
+}
+
+function renderJobs(jobs) {
+  if (!jobs.length) {
+    jobsTitle.textContent = 'Jobs';
+    jobsList.innerHTML = '';
+    jobsList.appendChild(emptyState);
+    return;
+  }
+
+  const sorted = [...jobs].sort((a, b) => {
+    const delta = (a.created_at || 0) - (b.created_at || 0);
+    return sortDay.value === 'oldest' ? delta : -delta;
+  });
+
+  const queuedCount = jobs.filter(j => j.status === 'queued').length;
+  jobsTitle.textContent = queuedCount > 0 ? `Jobs (${queuedCount} queued)` : 'Jobs';
+
+  const groups = new Map();
+  for (const job of sorted) {
+    const dayKey = formatDay(job.created_at);
+    if (!groups.has(dayKey)) groups.set(dayKey, []);
+    groups.get(dayKey).push(job);
+  }
+
+  const chunks = [];
+  for (const [day, dayJobs] of groups.entries()) {
+    chunks.push(`<div class="job-day">${escHtml(day)}</div>`);
+    for (const j of dayJobs) chunks.push(jobCard(j));
+  }
+  jobsList.innerHTML = chunks.join('');
+}
+
+function jobCard(j) {
+  const nowSec = Date.now() / 1000;
+  const pct = j.progress ?? 0;
+  const statusClass = { queued: 'queued', running: 'running', done: 'done', error: 'error', stopped: 'stopped' }[j.status] ?? 'queued';
+  const stageLabel  = { queued: 'Waiting in queue…', running: j.stage || 'Processing…', done: 'Complete', error: 'Error', stopped: 'Stopped' }[j.status] ?? '';
+  const elapsed = Math.max(0, Math.floor(nowSec - (j.created_at || nowSec)));
+  const etaLabel = buildEtaLabel(j.status, pct, elapsed);
+  const canStop = j.status === 'queued' || j.status === 'running';
+  const canRestart = j.status === 'stopped' || j.status === 'error';
+  const canResummarize = j.has_transcript && j.status !== 'running' && j.status !== 'queued';
+  const canDownloadTranscript = j.has_transcript;
+  const canDownloadSummary = j.has_summary;
+
+  const progressHtml = j.status === 'running' || j.status === 'queued'
+    ? `<div class="progress-wrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+        <div class="progress-row">
+          <span class="progress-label">${pct}% • ${etaLabel}</span>
+          ${canStop ? `<button class="btn-stop" onclick="stopJob('${j.id}')">Stop</button>` : ''}
+        </div>
+       </div>`
+    : `<div class="job-actions">
+         ${canDownloadTranscript ? `<button class="btn-action" onclick="downloadTranscript('${j.id}')">Transcript</button>` : ''}
+         ${canDownloadSummary ? `<button class="btn-action" onclick="downloadSummary('${j.id}')">Summary</button>` : ''}
+         ${canResummarize ? `<button class="btn-action" onclick="resummarizeJob('${j.id}')">Re-summarize</button>` : ''}
+         ${canRestart ? `<button class="btn-action" onclick="restartJob('${j.id}')">Restart</button>` : ''}
+         <button class="btn-action" onclick="openOutput('${j.id}')">Open Folder</button>
+       </div>`;
+
+  const errorHtml = j.status === 'error' && j.error
+    ? `<div class="job-error">⚠ ${escHtml(j.error)}</div>` : '';
+
+  return `<div class="job-card">
+    <div class="job-main">
+      <div class="job-name" title="${escHtml(j.filename)}">${escHtml(j.filename)}</div>
+      <div class="job-stage">${stageLabel}</div>
+      <div class="job-meta">Elapsed ${formatDuration(elapsed)}</div>
+      ${errorHtml}
+    </div>
+    ${progressHtml}
+    <span class="status-dot ${statusClass}"></span>
+  </div>`;
+}
+
+function buildEtaLabel(status, pct, elapsedSec) {
+  if (status === 'queued') return 'ETA after queued jobs';
+  if (status !== 'running') return 'ETA —';
+  if (!pct || pct < 2) return 'ETA calculating…';
+  const remaining = Math.max(0, Math.floor((elapsedSec * (100 - pct)) / pct));
+  return `ETA ${formatDuration(remaining)}`;
+}
+
+function formatDuration(totalSec) {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatDay(epochSec) {
+  const d = new Date((epochSec || 0) * 1000);
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+  });
+}
+
+async function stopJob(jobId) {
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/stop`, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast('Stop requested');
+    startPolling();
+  } catch (err) {
+    showToast(`Could not stop job: ${err.message}`, true);
+  }
+}
+
+async function restartJob(jobId) {
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/restart`, { method: 'POST' });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast('Job restarted');
+    startPolling();
+  } catch (err) {
+    showToast(`Could not restart: ${err.message}`, true);
+  }
+}
+
+async function resummarizeJob(jobId) {
+  const fd = new FormData();
+  fd.append('llm_model', selLLM.value);
+  fd.append('prompt_style', selPrompt.value);
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/resummarize`, { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error(await resp.text());
+    showToast('Re-summarization started');
+    startPolling();
+  } catch (err) {
+    showToast(`Could not re-summarize: ${err.message}`, true);
+  }
+}
+
+function downloadTranscript(jobId) {
+  window.location.href = `/api/jobs/${jobId}/download/transcript`;
+}
+
+function downloadSummary(jobId) {
+  window.location.href = `/api/jobs/${jobId}/download/summary`;
+}
+
+async function openOutput(jobId) {
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/open`, { method: 'POST' });
+    if (!resp.ok) showToast('Could not open output folder.', true);
+  } catch { showToast('Could not open output folder.', true); }
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── Init ───────────────────────────────────────────────
+loadModels();
+startPolling();
+</script>
+</body>
+</html>

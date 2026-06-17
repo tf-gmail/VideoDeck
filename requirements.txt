@@ -1,0 +1,11 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+aiosqlite==0.20.0
+httpx==0.28.1
+faster-whisper==1.1.1
+imageio-ffmpeg==0.5.1
+python-multipart==0.0.20
+aiofiles==24.1.0
+requests==2.32.4
+nvidia-cublas-cu12; platform_system == "Windows"
+nvidia-cudnn-cu12; platform_system == "Windows"
