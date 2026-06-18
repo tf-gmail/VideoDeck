@@ -18,11 +18,12 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _PROMPT_CACHE: dict[str, str] = {}
 MIN_SUMMARY_LEN = 180
-DIRECT_TRANSCRIPT_LIMIT = 70_000
-CHUNK_SIZE = 18_000
-CHUNK_OVERLAP = 1_000
-OUTLINE_CHUNK_SIZE = 12_000
-OUTLINE_OVERLAP = 800
+TARGET_SECTION_COUNT = 50
+MIN_SECTION_COUNT = 45
+MAX_SECTION_COUNT = 55
+MIN_CHUNK_SIZE = 2_200
+MAX_CHUNK_SIZE = 4_200
+CHUNK_OVERLAP = 280
 ProgressCallback = Callable[[int, str], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
@@ -79,167 +80,28 @@ async def summarize(
             output_language or "auto",
         )
 
-        content_map = await _build_content_map(client, model, cleaned, progress_cb)
-
-        # For very long transcripts, summarize in chunks first, then synthesize.
-        source_for_final = cleaned
-        coverage_items: list[str] = []
-        if len(cleaned) > DIRECT_TRANSCRIPT_LIMIT:
-            chunk_summaries = []
-            chunks = _split_text(cleaned, CHUNK_SIZE, CHUNK_OVERLAP)
-            total_chunks = max(1, len(chunks))
-            for idx, chunk in enumerate(chunks, start=1):
-                chunk_summary = await _chat(
-                    client,
-                    model=model,
-                    system=(
-                        "You summarize transcript chunks. Return concise bullets of key facts,"
-                        " concepts, and decisions. Do not add facts not in the text."
-                    ),
-                    user=(
-                        f"Chunk {idx}:\n<TRANSCRIPT_CHUNK>\n{chunk}\n</TRANSCRIPT_CHUNK>\n"
-                        "Return 8-15 bullet points."
-                    ),
-                    temperature=0.1,
-                )
-                if chunk_summary.strip():
-                    chunk_summaries.append(f"## Chunk {idx}\n{chunk_summary.strip()}")
-                    coverage_items.append(f"Chunk {idx}: {_anchor_from_chunk_summary(chunk_summary)}")
-                if progress_cb:
-                    pct = 35 + int((idx / total_chunks) * 35)
-                    await progress_cb(min(70, pct), f"Chunk summarization {idx}/{total_chunks}…")
-
-            if chunk_summaries:
-                source_for_final = "\n\n".join(chunk_summaries)
-        elif progress_cb:
-            await progress_cb(35, "Generating summary…")
-
-        if progress_cb:
-            await progress_cb(75, "Final summary synthesis…")
-        coverage_directive = ""
-        if coverage_items:
-            checklist = "\n".join(f"- {item}" for item in coverage_items)
-            coverage_directive = (
-                "MANDATORY COVERAGE CHECKLIST:\n"
-                "The final study notes must include all major content represented by every checklist "
-                "item below, in order. Do not skip any item.\n"
-                f"{checklist}\n\n"
-            )
-        logger.info("Sending first summary request to Ollama (model=%s)", model)
-        summary = await _chat(
-            client,
-            model=model,
-            system=system_prompt,
-            user=(
-                f"{coverage_directive}"
-                f"CONTENT MAP:\n{content_map}\n\n"
-                f"<TRANSCRIPT>\n{source_for_final}\n</TRANSCRIPT>"
-            ),
-            temperature=0.2,
-        )
-
-        # Retry once if model returned an unhelpfully short answer.
-        if len(summary.strip()) < MIN_SUMMARY_LEN:
+        chunk_size = _choose_chunk_size(cleaned)
+        chunks = _split_text(cleaned, chunk_size, CHUNK_OVERLAP)
+        total_chunks = max(1, len(chunks))
+        section_summaries: list[str] = []
+        for idx, chunk in enumerate(chunks, start=1):
             if progress_cb:
-                await progress_cb(92, "Refining short summary…")
-            summary = await _chat(
-                client,
+                pct = 5 + int((idx - 1) * 90 / total_chunks)
+                await progress_cb(pct, f"Summarizing section {idx}/{total_chunks}…")
+
+            chunk_for_summary = _clean_section_text(chunk)
+            section_summary = await _summarize_section(
+                client=client,
                 model=model,
-                system=system_prompt,
-                user=(
-                    "The previous answer was too short. Produce the full required structure "
-                    "with substantial detail.\n"
-                    f"<TRANSCRIPT>\n{source_for_final}\n</TRANSCRIPT>"
-                ),
-                temperature=0.2,
+                system_prompt=system_prompt,
+                chunk=chunk_for_summary,
+                section_index=idx,
+                total_sections=total_chunks,
+                output_language=output_language,
             )
+            section_summaries.append(section_summary.strip())
 
-        if len(summary.strip()) < MIN_SUMMARY_LEN:
-            raise RuntimeError(
-                "LLM returned an unexpectedly short summary. "
-                "Try a stronger general-purpose model (e.g. qwen2.5:14b or mistral:7b)."
-            )
-
-        # Coverage pass: if important terms are present in transcript but missing in summary,
-        # ask the model to integrate them explicitly.
-        key_terms = await _extract_key_terms(client, model, source_for_final)
-        missing_terms = [t for t in key_terms if t and t.lower() not in summary.lower()]
-        if missing_terms:
-            if progress_cb:
-                await progress_cb(96, "Integrating missing key terms…")
-            logger.info("Refining summary with missing key terms: %s", ", ".join(missing_terms[:12]))
-            summary = await _chat(
-                client,
-                model=model,
-                system=system_prompt,
-                user=(
-                    "Revise the summary below and ensure all listed key terms are explicitly "
-                    "covered at least once where contextually relevant.\n\n"
-                    f"Missing key terms: {', '.join(missing_terms[:12])}\n\n"
-                    f"Current summary draft:\n{summary}"
-                ),
-                temperature=0.2,
-            )
-
-        if coverage_items:
-            missing_coverage = await _find_missing_coverage(client, model, summary, coverage_items)
-            if missing_coverage:
-                if progress_cb:
-                    await progress_cb(98, "Adding missing section coverage…")
-                logger.info("Refining summary with missing coverage items: %s", ", ".join(missing_coverage[:16]))
-                summary = await _chat(
-                    client,
-                    model=model,
-                    system=system_prompt,
-                    user=(
-                        "Revise the summary so that each missing checklist item is explicitly covered "
-                        "in the Topic Breakdown and reflected in Key Points. Preserve the required markdown structure.\n\n"
-                        "Missing checklist items:\n"
-                        + "\n".join(f"- {item}" for item in missing_coverage[:16])
-                        + "\n\nCurrent summary draft:\n"
-                        + summary
-                    ),
-                    temperature=0.2,
-                )
-
-        final_missing_terms = await _extract_missing_terms(client, model, source_for_final, summary)
-        final_missing_coverage = await _find_missing_coverage(client, model, summary, coverage_items) if coverage_items else []
-        if final_missing_terms or final_missing_coverage:
-            logger.warning(
-                "Summary still missing coverage after repair; missing_terms=%s missing_coverage=%s",
-                ", ".join(final_missing_terms[:12]),
-                ", ".join(final_missing_coverage[:16]),
-            )
-            if progress_cb:
-                await progress_cb(99, "Final quality repair…")
-            summary = await _chat(
-                client,
-                model=model,
-                system=(
-                    system_prompt
-                    + "\n\nFINAL QUALITY GATE: You must rewrite the entire response from scratch. "
-                    + "The new answer must include every required topic, key term, and checklist item. "
-                    + "Do not preserve omissions from the draft."
-                ),
-                user=(
-                    "Required structure: TL;DR, Key Points, Topic Breakdown, Glossary, Quiz Questions.\n\n"
-                    f"CONTENT MAP:\n{content_map}\n\n"
-                    f"Missing key terms: {', '.join(final_missing_terms[:12]) or 'none'}\n"
-                    f"Missing coverage items: {', '.join(final_missing_coverage[:16]) or 'none'}\n\n"
-                    f"Current draft to improve or replace:\n{summary}"
-                ),
-                temperature=0.15,
-            )
-
-            final_missing_terms = await _extract_missing_terms(client, model, source_for_final, summary)
-            final_missing_coverage = await _find_missing_coverage(client, model, summary, coverage_items) if coverage_items else []
-            if final_missing_terms or final_missing_coverage:
-                raise RuntimeError(
-                    "Summary quality gate failed after repair. "
-                    f"Missing terms: {', '.join(final_missing_terms[:12]) or 'none'}. "
-                    f"Missing coverage: {', '.join(final_missing_coverage[:16]) or 'none'}."
-                )
-
+        summary = "\n\n---\n\n".join(section_summaries)
         if progress_cb:
             await progress_cb(100, "Summary generated")
         return summary
@@ -283,6 +145,45 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     return chunks
 
 
+def _choose_chunk_size(text: str) -> int:
+    n = max(1, len(text))
+    desired = max(1, n // TARGET_SECTION_COUNT)
+    size = max(MIN_CHUNK_SIZE, min(MAX_CHUNK_SIZE, desired))
+
+    # Keep expected section count in the preferred range (16-20) when possible.
+    estimated = (n + max(1, size - CHUNK_OVERLAP) - 1) // max(1, size - CHUNK_OVERLAP)
+    if estimated < MIN_SECTION_COUNT:
+        size = max(MIN_CHUNK_SIZE, n // MIN_SECTION_COUNT)
+    elif estimated > MAX_SECTION_COUNT:
+        size = min(MAX_CHUNK_SIZE, max(MIN_CHUNK_SIZE, n // MAX_SECTION_COUNT))
+    return max(MIN_CHUNK_SIZE, min(MAX_CHUNK_SIZE, size))
+
+
+def _clean_section_text(text: str) -> str:
+    filler_words = {
+        "aeh", "aehm", "hm", "hmm", "mhm", "so", "also", "ja", "ne", "ok", "okay",
+    }
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    kept: list[str] = []
+    for line in lines:
+        normalized = _normalize_text(line)
+        tokens = normalized.split()
+        if not tokens:
+            continue
+
+        # Drop lines that are mostly filler/interjections from noisy transcripts.
+        content_tokens = [t for t in tokens if t not in filler_words]
+        if len(tokens) <= 4 and len(content_tokens) <= 1:
+            continue
+        if len(content_tokens) == 0:
+            continue
+
+        kept.append(line)
+
+    cleaned = "\n".join(kept).strip()
+    return cleaned or text
+
+
 def _language_instruction(output_language: str | None) -> str:
     if not output_language:
         return ""
@@ -294,52 +195,47 @@ def _language_instruction(output_language: str | None) -> str:
     return ""
 
 
-def _anchor_from_chunk_summary(chunk_summary: str) -> str:
-    for line in chunk_summary.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        line = line.lstrip("-*").strip()
-        if line:
-            return line[:140]
-    return "major points from this section"
-
-
-async def _build_content_map(
+async def _summarize_section(
     client: httpx.AsyncClient,
     model: str,
-    transcript: str,
-    progress_cb: ProgressCallback | None,
+    system_prompt: str,
+    chunk: str,
+    section_index: int,
+    total_sections: int,
+    output_language: str | None,
 ) -> str:
-    chunks = _split_text(transcript, OUTLINE_CHUNK_SIZE, OUTLINE_OVERLAP)
-    total_chunks = max(1, len(chunks))
-    map_parts: list[str] = []
-
-    for idx, chunk in enumerate(chunks, start=1):
-        outline = await _chat(
-            client,
-            model=model,
-            system=(
-                "Extract a dense study-note scaffold from this lecture chunk. Return 8-12 bullets only. "
-                "Include every distinct topic, example, definition, number, warning, named concept, and comparison. "
-                "Do not merge unrelated points or compress away details. Prefer specific facts over generalities."
-            ),
-            user=(
-                f"Chunk {idx} of {total_chunks}:\n"
-                f"<TRANSCRIPT_CHUNK>\n{chunk}\n</TRANSCRIPT_CHUNK>"
-            ),
-            temperature=0.0,
-        )
-        if outline.strip():
-            map_parts.append(
-                f"## Chunk {idx}\n"
-                f"{outline.strip()}"
-            )
-        if progress_cb:
-            pct = 8 + int((idx / total_chunks) * 22)
-            await progress_cb(min(30, pct), f"Building content map {idx}/{total_chunks}…")
-
-    return "\n\n".join(map_parts) if map_parts else transcript[:20_000]
+    section_label = f"Abschnitt {section_index}/{total_sections}"
+    prompt = (
+        f"You are summarizing one contiguous lecture section for study notes. "
+        f"Write in the language requested by the system prompt. "
+        f"Focus only on this section and do not reference other sections.\n\n"
+        f"REQUIREMENTS:\n"
+        f"- Produce a mini study note for {section_label}.\n"
+        f"- Keep all important details, examples, definitions, numbers, names, warnings, and comparisons.\n"
+        f"- Use a compact but complete structure:\n"
+        f"  ## {section_label}\n"
+        f"  ### TL;DR\n"
+        f"  2-3 sentences.\n"
+        f"  ### Key Points\n"
+        f"  5-10 bullets.\n"
+        f"  ### Topic Breakdown\n"
+        f"  2-4 short paragraphs or bullets.\n"
+        f"  ### Glossary\n"
+        f"  3-8 terms if present.\n"
+        f"  ### Quiz Questions\n"
+        f"  2-4 questions with answers.\n"
+        f"- Do not invent facts.\n"
+        f"- Keep the section self-contained and detailed.\n"
+    )
+    logger.info("Sending section summary request %s to Ollama (model=%s)", section_label, model)
+    summary = await _chat(
+        client,
+        model=model,
+        system=system_prompt,
+        user=f"{prompt}\n<TRANSCRIPT_SECTION>\n{chunk}\n</TRANSCRIPT_SECTION>",
+        temperature=0.2,
+    )
+    return summary
 
 
 async def _extract_key_terms(client: httpx.AsyncClient, model: str, text: str) -> list[str]:
@@ -383,8 +279,7 @@ async def _extract_missing_terms(
     summary: str,
 ) -> list[str]:
     transcript_terms = await _extract_key_terms(client, model, transcript)
-    summary_lower = summary.lower()
-    return [term for term in transcript_terms if term and term.lower() not in summary_lower]
+    return [term for term in transcript_terms if term and not _term_covered(term, summary)]
 
 
 async def _find_missing_coverage(
@@ -419,11 +314,52 @@ async def _find_missing_coverage(
     except Exception:
         pass
 
-    # Fallback heuristic: basic string containment check.
-    lowered_summary = summary.lower()
+    # Fallback heuristic: normalized string / token overlap check.
     missing = []
     for item in coverage_items:
         anchor = item.split(":", 1)[-1].strip().lower()
-        if anchor and anchor not in lowered_summary:
+        if anchor and not _term_covered(anchor, summary):
             missing.append(item)
     return missing
+
+
+def _term_covered(term: str, text: str) -> bool:
+    normalized_term = _normalize_text(term)
+    normalized_text = _normalize_text(text)
+    if not normalized_term:
+        return True
+    if normalized_term in normalized_text:
+        return True
+
+    term_tokens = _meaningful_tokens(term)
+    if not term_tokens:
+        return False
+
+    text_tokens = set(_meaningful_tokens(text))
+    if not text_tokens:
+        return False
+
+    overlap = sum(1 for token in term_tokens if token in text_tokens)
+    if len(term_tokens) == 1:
+        token = term_tokens[0]
+        return any(token in candidate or candidate in token for candidate in text_tokens)
+
+    # Treat the term as covered when most meaningful tokens are present.
+    required = max(2, (len(term_tokens) + 1) // 2)
+    return overlap >= required
+
+
+def _normalize_text(text: str) -> str:
+    text = text.lower()
+    text = text.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _meaningful_tokens(text: str) -> list[str]:
+    stopwords = {
+        "der", "die", "das", "und", "oder", "von", "im", "in", "am", "an", "zu",
+        "the", "a", "an", "of", "for", "to", "and", "or", "with", "is", "are", "be",
+    }
+    tokens = [t for t in _normalize_text(text).split() if len(t) > 2 and t not in stopwords]
+    return tokens

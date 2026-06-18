@@ -290,42 +290,93 @@ async def api_resummarize_job(
     await update_job(job_id, status="running", stage="Re-summarizing…", progress=66, error=None)
     await update_job(job_id, stage="Starting summary generation…", progress=67)
 
+    _start_resummarize_task(
+        job_id=job_id,
+        transcript_text=transcript_text,
+        source_file_path=job["file_path"],
+        whisper_model=job.get("whisper_model") or "large-v3",
+        llm_model=llm_model,
+        prompt_style=prompt_style,
+        lang_value=lang_value,
+    )
+
+    return {"ok": True}
+
+
+async def _run_resummarize(
+    job_id: str,
+    transcript_text: str,
+    source_file_path: str,
+    whisper_model: str,
+    llm_model: str,
+    prompt_style: str,
+    lang_value: str,
+) -> None:
+
     async def _summary_progress(pct: int, stage: str) -> None:
         # Re-summarize occupies 66..99 before final completion.
         overall = min(99, 66 + int((max(0, min(100, pct)) * 33) / 100))
         await update_job(job_id, stage=stage, progress=overall)
 
-    summary_md = await summarize(
-        transcript_text,
-        llm_model,
-        prompt_style,
-        progress_cb=_summary_progress,
-        output_language=lang_value,
-    )
+    try:
+        summary_md = await summarize(
+            transcript_text,
+            llm_model,
+            prompt_style,
+            progress_cb=_summary_progress,
+            output_language=lang_value,
+        )
 
-    source = Path(job["file_path"])
-    summary_file = OUTPUT_DIR / f"{job_id}_summary.md"
+        source = Path(source_file_path)
+        summary_file = OUTPUT_DIR / f"{job_id}_summary.md"
 
-    header = (
-        f"# {source.stem}\n\n"
-        f"> **Source:** {source.name}  \n"
-        f"> **Language:** {lang_value}  \n"
-        f"> **Whisper model:** {job.get('whisper_model') or 'large-v3'}  \n"
-        f"> **LLM model:** {llm_model}  \n\n"
-        "---\n\n"
-    )
-    summary_file.write_text(header + summary_md, encoding="utf-8")
+        header = (
+            f"# {source.stem}\n\n"
+            f"> **Source:** {source.name}  \n"
+            f"> **Language:** {lang_value}  \n"
+            f"> **Whisper model:** {whisper_model}  \n"
+            f"> **LLM model:** {llm_model}  \n\n"
+            "---\n\n"
+        )
+        summary_file.write_text(header + summary_md, encoding="utf-8")
 
-    await update_job(
-        job_id,
-        status="done",
-        stage="Complete",
-        progress=100,
-        llm_model=llm_model,
-        prompt_style=prompt_style,
-        summary=summary_md[:2000],
+        await update_job(
+            job_id,
+            status="done",
+            stage="Complete",
+            progress=100,
+            llm_model=llm_model,
+            prompt_style=prompt_style,
+            summary=summary_md[:2000],
+        )
+    except asyncio.CancelledError:
+        await update_job(job_id, status="stopped", stage="Stopped", error=None)
+    except Exception as exc:
+        await update_job(job_id, status="error", stage="Error", error=str(exc))
+
+
+def _start_resummarize_task(
+    job_id: str,
+    transcript_text: str,
+    source_file_path: str,
+    whisper_model: str,
+    llm_model: str,
+    prompt_style: str,
+    lang_value: str,
+) -> None:
+    task = asyncio.create_task(
+        _run_resummarize(
+            job_id=job_id,
+            transcript_text=transcript_text,
+            source_file_path=source_file_path,
+            whisper_model=whisper_model,
+            llm_model=llm_model,
+            prompt_style=prompt_style,
+            lang_value=lang_value,
+        )
     )
-    return {"ok": True}
+    _job_tasks[job_id] = task
+    task.add_done_callback(lambda _t, jid=job_id: _job_tasks.pop(jid, None))
 
 
 # ── Open output folder ─────────────────────────────────────────────────────────
